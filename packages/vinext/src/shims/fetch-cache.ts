@@ -763,15 +763,28 @@ const originalFetch: typeof globalThis.fetch = (_gFetch[_ORIG_FETCH_KEY] ??=
 
 const _noop = (): void => {};
 
+/**
+ * Cancel a response body that nothing is reading anymore.
+ *
+ * A body can fail after `fetch()` resolves. The caller may already have caught
+ * that error on another clone, but `cancel()` of the errored stream still
+ * rejects. Cleanup is best-effort and must not surface as an unhandled
+ * rejection.
+ *
+ * @internal The response-body `FinalizationRegistry` calls this. Tests invoke
+ * it directly so they do not wait for garbage collection.
+ */
+export function _finalizeResponseBody(weakRef: WeakRef<ReadableStream<Uint8Array>>): void {
+  const stream = weakRef.deref();
+  if (stream && !stream.locked) {
+    void stream.cancel("Response object has been garbage collected").catch(_noop);
+  }
+}
+
 let _responseBodyRegistry: FinalizationRegistry<WeakRef<ReadableStream<Uint8Array>>> | undefined;
 
 if (globalThis.FinalizationRegistry) {
-  _responseBodyRegistry = new FinalizationRegistry((weakRef) => {
-    const stream = weakRef.deref();
-    if (stream && !stream.locked) {
-      void stream.cancel("Response object has been garbage collected").then(_noop, _noop);
-    }
-  });
+  _responseBodyRegistry = new FinalizationRegistry(_finalizeResponseBody);
 }
 
 function getFetchObservationUrl(input: string | URL | Request): string {
